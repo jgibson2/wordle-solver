@@ -34,7 +34,7 @@ class Outcome(enum.Enum):
 
 
 class Wordle:
-    def __init__(self, solution, valid_solutions, valid_guesses, max_attempts=6):
+    def __init__(self, solution, valid_solutions, valid_guesses, max_attempts=6, hard_mode=False):
         self.solution = solution
         if solution not in valid_solutions:
             raise ValueError("solution not in valid solutions")
@@ -42,6 +42,9 @@ class Wordle:
         self.valid_solutions = set(valid_solutions)
         self.max_attempts = max_attempts
         self.num_attempts = 0
+        self.known = [None] * len(solution)
+        self.present_character_counts = {}
+        self.hard_mode = hard_mode
 
     def guess(self, guess):
         if self.num_attempts > self.max_attempts:
@@ -50,9 +53,11 @@ class Wordle:
             raise ValueError("length of guess and solution do not match")
         if guess not in self.valid_guesses and guess not in self.valid_solutions:
             raise ValueError("guess not in valid guesses")
+        if self.hard_mode and not Wordle.check_hard_mode(guess, self.known, self.present_character_counts):
+            raise ValueError("guess does not use all information learned")
         outcome = None
         result = Wordle.check(guess, self.solution)
-        self.num_attempts += 1
+        self.update(guess, result)
         if all([r == GuessResult.CORRECT for r in result]):
             outcome = Outcome.WIN
         elif self.num_attempts == self.max_attempts:
@@ -61,6 +66,16 @@ class Wordle:
 
     def num_letters(self):
         return len(self.solution)
+
+    def update(self, guess, result):
+        self.num_attempts += 1
+        for i, (g, r) in enumerate(zip(guess, result)):
+            if r == GuessResult.CORRECT:
+                self.known[i] = g
+        present_counts = collections.Counter(
+            [g for g, r in zip(guess, result) if r == GuessResult.PRESENT or r == GuessResult.CORRECT])
+        for c, v in present_counts.items():
+            self.present_character_counts[c] = max(v, self.present_character_counts.get(c, 0))
 
     @staticmethod
     def check(guess, solution):
@@ -76,11 +91,27 @@ class Wordle:
                 current_counts[guess_letter] -= 1
         return result
 
+    @staticmethod
+    def check_hard_mode(guess, known, present_character_counts):
+        # make sure guess and known match
+        for g, k in zip(list(guess), known):
+            if k is not None and g != k:
+                return False
+        # make sure all characters are used
+        guess_counts = collections.Counter(list(guess))
+        for char, count in present_character_counts.items():
+            if char not in guess_counts:
+                return False
+            if guess_counts[char] < count:
+                return False
+        return True
+
 
 class WordleSolver:
     ALPHABET = tuple((chr(ord('a') + i) for i in range(26)))
 
-    def __init__(self, num_letters, valid_solutions, valid_guesses, cached_first_guess=None, num_guesses=1000, hard_mode=False):
+    def __init__(self, num_letters, valid_solutions, valid_guesses, cached_first_guess=None, num_guesses=1000,
+                 hard_mode=False):
         self.num_letters = num_letters
         self.valid_solutions = set(valid_solutions)
         self.valid_guesses = set(valid_guesses)
@@ -98,9 +129,10 @@ class WordleSolver:
             raise ValueError("Guess length does not match number of letters")
         self.past_guesses.append(guess)
 
-        self._update_in_place(guess, guess_result, self.known, self.letter_sets, self.present_character_counts)
+        WordleSolver.update_state_in_place(guess, guess_result, self.known, self.letter_sets,
+                                           self.present_character_counts)
 
-        for soln in self._find_invalidated_solutions(
+        for soln in WordleSolver.find_invalidated_solutions(
                 self.valid_solutions,
                 self.known,
                 self.letter_sets,
@@ -109,7 +141,7 @@ class WordleSolver:
             self.valid_solutions.remove(soln)
 
         if self.hard_mode:
-            for guess in self._find_invalidated_solutions(
+            for guess in WordleSolver.find_invalidated_solutions(
                     self.valid_guesses,
                     self.known,
                     self.letter_sets,
@@ -117,9 +149,11 @@ class WordleSolver:
             ):
                 self.valid_guesses.remove(guess)
 
-    def _update_in_place(self, guess, guess_result, known, letter_sets, present_character_counts):
+    @staticmethod
+    def update_state_in_place(guess, guess_result, known, letter_sets, present_character_counts):
         # update present counts
-        present_counts = collections.Counter([g for g, r in zip(guess, guess_result) if r == GuessResult.PRESENT or r == GuessResult.CORRECT])
+        present_counts = collections.Counter(
+            [g for g, r in zip(guess, guess_result) if r == GuessResult.PRESENT or r == GuessResult.CORRECT])
         for c, v in present_counts.items():
             present_character_counts[c] = max(v, present_character_counts.get(c, 0))
         for i, (letter, result) in enumerate(zip(list(guess), guess_result)):
@@ -132,18 +166,20 @@ class WordleSolver:
                     for s in letter_sets:
                         if letter in s:
                             s.remove(letter)
-                elif letter in letter_sets[i]:
-                    # if we guessed the same letter 2 times but there's only one,
-                    # one of them will be marked PRESENT while the other is
-                    # marked as ABSENT -- even though this second one is
-                    # marked as ABSENT here, it just means that it's not at
-                    # this location (and a second one doesn't exist)
-                    # extrapolates to 3+ as well
-                    letter_sets[i].remove(letter)
+                else:
+                    if letter in letter_sets[i]:
+                        # if we guessed the same letter 2 times but there's only one,
+                        # one of them will be marked PRESENT while the other is
+                        # marked as ABSENT -- even though this second one is
+                        # marked as ABSENT here, it just means that it's not at
+                        # this location (and a second one doesn't exist)
+                        # extrapolates to 3+ as well
+                        letter_sets[i].remove(letter)
             elif result == GuessResult.PRESENT and letter in letter_sets[i]:
                 letter_sets[i].remove(letter)
 
-    def _find_invalidated_solutions(self, valid_solutions, known, letter_sets, present_character_counts):
+    @staticmethod
+    def find_invalidated_solutions(valid_solutions, known, letter_sets, present_character_counts):
         regex_parts = [''] * len(known)
         for i in range(len(known)):
             if known[i] is not None:
@@ -157,7 +193,7 @@ class WordleSolver:
                 to_remove.append(soln)
                 # print(f'{soln} did not match regex {regex}')
             else:
-                char_counts = dict(collections.Counter(list(soln)))
+                char_counts = collections.Counter(list(soln))
                 for c in present_character_counts:
                     if c not in char_counts or char_counts[c] < present_character_counts[c]:
                         # print(f'{soln} did not contain enough {c}; required {self.present_character_counts[c]}')
@@ -178,9 +214,9 @@ class WordleSolver:
                 known = copy.copy(self.known)
                 letter_sets = copy.deepcopy(self.letter_sets)
                 present_character_counts = copy.deepcopy(self.present_character_counts)
-                self._update_in_place(guess, guess_result, known, letter_sets,
-                                      present_character_counts)
-                removed += len(self._find_invalidated_solutions(
+                WordleSolver.update_state_in_place(guess, guess_result, known, letter_sets,
+                                                   present_character_counts)
+                removed += len(WordleSolver.find_invalidated_solutions(
                     self.valid_solutions,
                     known,
                     letter_sets,
@@ -195,7 +231,7 @@ class WordleSolver:
 
 
 def run_game(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions, valid_guesses, word):
-    wordle = Wordle(word, valid_solutions, valid_guesses, max_attempts=max_attempts)
+    wordle = Wordle(word, valid_solutions, valid_guesses, max_attempts=max_attempts, hard_mode=hard_mode)
     solver = WordleSolver(
         wordle.num_letters(),
         valid_solutions,
@@ -275,10 +311,12 @@ def interactive(hard_mode, max_attempts, num_guesses, first_guess, valid_solutio
               help="Run in interactive mode (default) or simulate all possible games")
 @click.option("--hard-mode", type=click.BOOL, default=False, help="Run games in hard mode")
 @click.option("--max-attempts", type=click.INT, default=6, help="Maximum number of attempts in a game")
-@click.option("--num-guesses", type=click.INT, default=1000, help="Number of guesses to check while searching for optimum")
-@click.option("--words-file", type=click.Path(), default="words.json", help="File containing valid solutions and guesses")
+@click.option("--num-guesses", type=click.INT, default=1000,
+              help="Number of guesses to check while searching for optimum")
+@click.option("--words-file", type=click.Path(), default="words.json",
+              help="File containing valid solutions and guesses")
 @click.option("--first-guess", type=click.STRING, default="soare",
-            help="Default first guess to make. Leave blank for random. (Warning: this will take a long time)")
+              help="Default first guess to make. Leave blank for random. (Warning: this will take a long time)")
 def main(run_mode, hard_mode, max_attempts, num_guesses, words_file, first_guess):
     with open(words_file, 'r') as wf:
         words_obj = json.load(wf)
