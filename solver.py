@@ -116,7 +116,8 @@ class WordleSolver:
         self.valid_solutions = set(valid_solutions)
         self.valid_guesses = set(valid_guesses)
         self.letter_sets = [set(list(WordleSolver.ALPHABET)) for _ in range(self.num_letters)]
-        self.present_character_counts = {}
+        self.character_lower_bounds = {}
+        self.character_upper_bounds = {}
         self.known = [None] * self.num_letters
         self.past_guesses = []
         self.cached_guess = cached_first_guess
@@ -130,13 +131,14 @@ class WordleSolver:
         self.past_guesses.append(guess)
 
         WordleSolver.update_state_in_place(guess, guess_result, self.known, self.letter_sets,
-                                           self.present_character_counts)
+                                           self.character_lower_bounds, self.character_upper_bounds)
 
         for soln in WordleSolver.find_invalidated_solutions(
                 self.valid_solutions,
                 self.known,
                 self.letter_sets,
-                self.present_character_counts,
+                self.character_lower_bounds,
+                self.character_upper_bounds
         ):
             self.valid_solutions.remove(soln)
 
@@ -145,27 +147,29 @@ class WordleSolver:
                     self.valid_guesses,
                     self.known,
                     self.letter_sets,
-                    self.present_character_counts,
+                    self.character_lower_bounds,
+                    self.character_upper_bounds
             ):
                 self.valid_guesses.remove(guess)
 
     @staticmethod
-    def update_state_in_place(guess, guess_result, known, letter_sets, present_character_counts):
+    def update_state_in_place(guess, guess_result, known, letter_sets, character_lower_bounds, character_upper_bounds):
         # update present counts
         present_counts = collections.Counter(
             [g for g, r in zip(guess, guess_result) if r == GuessResult.PRESENT or r == GuessResult.CORRECT])
         for c, v in present_counts.items():
-            present_character_counts[c] = max(v, present_character_counts.get(c, 0))
+            character_lower_bounds[c] = max(v, character_lower_bounds.get(c, 0))
         for i, (letter, result) in enumerate(zip(list(guess), guess_result)):
             if result == GuessResult.CORRECT:
                 letter_sets[i] = set()
                 known[i] = letter
         for i, (letter, result) in enumerate(zip(list(guess), guess_result)):
             if result == GuessResult.ABSENT:
-                if letter not in present_character_counts:
+                if letter not in character_lower_bounds:
                     for s in letter_sets:
                         if letter in s:
                             s.remove(letter)
+                    character_upper_bounds[letter] = 0
                 else:
                     if letter in letter_sets[i]:
                         # if we guessed the same letter 2 times but there's only one,
@@ -175,11 +179,12 @@ class WordleSolver:
                         # this location (and a second one doesn't exist)
                         # extrapolates to 3+ as well
                         letter_sets[i].remove(letter)
+                    character_upper_bounds[letter] = character_lower_bounds[letter] + 1
             elif result == GuessResult.PRESENT and letter in letter_sets[i]:
                 letter_sets[i].remove(letter)
 
     @staticmethod
-    def find_invalidated_solutions(valid_solutions, known, letter_sets, present_character_counts):
+    def find_invalidated_solutions(valid_solutions, known, letter_sets, character_lower_bounds, character_upper_bounds):
         regex_parts = [''] * len(known)
         for i in range(len(known)):
             if known[i] is not None:
@@ -189,16 +194,26 @@ class WordleSolver:
         regex = re.compile(''.join(regex_parts))
         to_remove = []
         for soln in valid_solutions:
+            removed = False
             if not re.match(regex, soln):
                 to_remove.append(soln)
+                removed = True
                 # print(f'{soln} did not match regex {regex}')
-            else:
+            if not removed:
                 char_counts = collections.Counter(list(soln))
-                for c in present_character_counts:
-                    if c not in char_counts or char_counts[c] < present_character_counts[c]:
-                        # print(f'{soln} did not contain enough {c}; required {self.present_character_counts[c]}')
+                for c in character_lower_bounds:
+                    if c not in char_counts or char_counts[c] < character_lower_bounds[c]:
+                        # print(f'{soln} did not contain enough {c}; required {character_lower_bounds[c]}')
                         to_remove.append(soln)
+                        removed = True
                         break
+                if not removed:
+                    for c in char_counts:
+                        if c in character_upper_bounds and char_counts[c] > character_upper_bounds[c]:
+                            # print(f'{soln} contained too many {c}; limit {character_upper_bounds[c]}')
+                            to_remove.append(soln)
+                            removed = True
+                            break
         return to_remove
 
     def suggest_guess(self):
@@ -213,24 +228,29 @@ class WordleSolver:
                 guess_result = Wordle.check(guess, soln)
                 known = copy.copy(self.known)
                 letter_sets = copy.deepcopy(self.letter_sets)
-                present_character_counts = copy.deepcopy(self.present_character_counts)
+                character_lower_bounds = copy.deepcopy(self.character_lower_bounds)
+                character_upper_bounds = copy.deepcopy(self.character_upper_bounds)
                 WordleSolver.update_state_in_place(guess, guess_result, known, letter_sets,
-                                                   present_character_counts)
+                                                   character_lower_bounds, character_upper_bounds)
                 removed += len(WordleSolver.find_invalidated_solutions(
                     self.valid_solutions,
                     known,
                     letter_sets,
-                    present_character_counts,
+                    character_lower_bounds,
+                    character_upper_bounds
                 ))
             # print(f'Guess {guess} removed {removed} solutions')
             return removed
 
         return max(
-            itertools.chain(np.random.choice(tuple(self.valid_guesses), self.num_guesses), self.valid_solutions),
+            itertools.chain(
+                np.random.choice(tuple(self.valid_guesses), min(self.num_guesses, len(self.valid_guesses))),
+                self.valid_solutions
+            ),
             key=key)
 
 
-def run_game(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions, valid_guesses, word):
+def run_game(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions, valid_guesses, word, print_results=True):
     wordle = Wordle(word, valid_solutions, valid_guesses, max_attempts=max_attempts, hard_mode=hard_mode)
     solver = WordleSolver(
         wordle.num_letters(),
@@ -249,14 +269,15 @@ def run_game(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions,
         if outcome is not None:
             outcome_str = 'Won' if outcome == Outcome.WIN else 'Lost'
             outcome_file = sys.stdout if outcome == Outcome.WIN else sys.stderr
-            print(
-                f'{outcome_str} game with word {word}; guessed {" -> ".join(guesses)}',
-                file=outcome_file
-            )
+            if print_results:
+                print(
+                    f'{outcome_str} game with word {word}; guessed {" -> ".join(guesses)}',
+                    file=outcome_file
+                )
             return outcome, len(guesses)
 
 
-def simulate(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions, valid_guesses):
+def simulate_all_games(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions, valid_guesses):
     fn = functools.partial(
         run_game,
         hard_mode,
@@ -299,7 +320,7 @@ def interactive(hard_mode, max_attempts, num_guesses, first_guess, valid_solutio
         results = input("Input the results (Y = yellow, G = green, B = blank):").strip().lower()
         if results == ''.join(["g"] * num_letters):
             print("You won!")
-            break
+            return
         guess_results = [replacements[c] for c in list(results)]
         solver.update(guess, guess_results)
 
@@ -315,9 +336,11 @@ def interactive(hard_mode, max_attempts, num_guesses, first_guess, valid_solutio
               help="Number of guesses to check while searching for optimum")
 @click.option("--words-file", type=click.Path(), default="words.json",
               help="File containing valid solutions and guesses")
+@click.option("--word", type=click.STRING, required=False,
+              help="Word to guess (in simulate mode)")
 @click.option("--first-guess", type=click.STRING, default="soare",
               help="Default first guess to make. Leave blank for random. (Warning: this will take a long time)")
-def main(run_mode, hard_mode, max_attempts, num_guesses, words_file, first_guess):
+def main(run_mode, hard_mode, max_attempts, num_guesses, words_file, word, first_guess):
     with open(words_file, 'r') as wf:
         words_obj = json.load(wf)
         valid_solutions = words_obj['valid_solutions']
@@ -325,7 +348,12 @@ def main(run_mode, hard_mode, max_attempts, num_guesses, words_file, first_guess
     if run_mode == "interactive":
         interactive(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions, valid_guesses)
     elif run_mode == "simulate":
-        simulate(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions, valid_guesses)
+        if word is None:
+            simulate_all_games(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions, valid_guesses)
+        else:
+            _, num_guesses = run_game(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions,
+                                      valid_guesses, word)
+            print(f"Used {num_guesses} guesses.")
     else:
         raise ValueError("Invalid run mode!")
 
