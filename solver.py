@@ -12,7 +12,6 @@ import re
 
 import concurrent.futures
 
-
 class GuessResult(enum.Enum):
     ABSENT = 0
     PRESENT = 1
@@ -78,6 +77,7 @@ class Wordle:
             self.present_character_counts[c] = max(v, self.present_character_counts.get(c, 0))
 
     @staticmethod
+    @functools.lru_cache(16384)
     def check(guess, solution):
         result = [GuessResult.ABSENT] * len(guess)
         current_counts = collections.Counter(list(solution))
@@ -89,7 +89,7 @@ class Wordle:
             if result[i] == GuessResult.ABSENT and guess_letter in current_counts and current_counts[guess_letter] > 0:
                 result[i] = GuessResult.PRESENT
                 current_counts[guess_letter] -= 1
-        return result
+        return tuple(result)
 
     @staticmethod
     def check_hard_mode(guess, known, present_character_counts):
@@ -129,6 +129,8 @@ class WordleSolver:
         if len(guess) != self.num_letters:
             raise ValueError("Guess length does not match number of letters")
         self.past_guesses.append(guess)
+        if guess in self.valid_guesses:
+            self.valid_guesses.remove(guess)
 
         WordleSolver.update_state_in_place(guess, guess_result, self.known, self.letter_sets,
                                            self.character_lower_bounds, self.character_upper_bounds)
@@ -223,31 +225,33 @@ class WordleSolver:
             return next(iter(self.valid_solutions))
 
         def key(guess):
-            removed = 0
-            for soln in self.valid_solutions:
-                guess_result = Wordle.check(guess, soln)
-                known = copy.copy(self.known)
-                letter_sets = copy.deepcopy(self.letter_sets)
-                character_lower_bounds = copy.deepcopy(self.character_lower_bounds)
-                character_upper_bounds = copy.deepcopy(self.character_upper_bounds)
-                WordleSolver.update_state_in_place(guess, guess_result, known, letter_sets,
-                                                   character_lower_bounds, character_upper_bounds)
-                removed += len(WordleSolver.find_invalidated_solutions(
-                    self.valid_solutions,
-                    known,
-                    letter_sets,
-                    character_lower_bounds,
-                    character_upper_bounds
-                ))
-            # print(f'Guess {guess} removed {removed} solutions')
-            return removed
+            return WordleSolver.calc_guess_expected_info_gain(self.valid_solutions, guess)
 
-        return max(
-            itertools.chain(
+        if self.num_guesses == -1:
+            iterator = itertools.chain(
+                self.valid_guesses,
+                self.valid_solutions
+            )
+        else:
+            iterator = itertools.chain(
                 np.random.choice(tuple(self.valid_guesses), min(self.num_guesses, len(self.valid_guesses))),
                 self.valid_solutions
-            ),
-            key=key)
+            )
+        return max(iterator, key=key)
+
+    @staticmethod
+    def calc_guess_expected_info_gain(valid_solutions, guess):
+        # calculates the total entropy in bits for the guess over the remaining solutions
+        result_counts = collections.Counter(map(lambda s: Wordle.check(guess, s), valid_solutions))
+        total = len(valid_solutions)
+        result_probs = np.array(list(result_counts.values())) / total
+        return -1 * np.sum(result_probs * np.log(result_probs))
+
+
+@functools.cache
+def get_all_possible_results(n):
+    res = np.stack(np.meshgrid(*([[GuessResult.ABSENT, GuessResult.PRESENT, GuessResult.CORRECT]] * n))).reshape(-1, n)
+    return tuple([tuple(r) for r in res])
 
 
 def run_game(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions, valid_guesses, word, print_results=True):
@@ -296,6 +300,17 @@ def simulate_all_games(hard_mode, max_attempts, num_guesses, first_guess, valid_
         print(f"Win rate: {win_rate:.2f}%")
 
 
+def determine_optimal_starting_word(valid_solutions, valid_guesses):
+    fn = functools.partial(WordleSolver.calc_guess_expected_info_gain, valid_solutions)
+
+    with concurrent.futures.ProcessPoolExecutor() as pool:
+        results = pool.map(fn, valid_guesses)
+        best_guess_index, bits = max(enumerate(results), key=lambda r: r[1])
+        best_guess = valid_guesses[best_guess_index]
+        print(f"Determined optimal first guess {best_guess} with {bits} bits of information")
+        return best_guess
+
+
 def interactive(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions, valid_guesses):
     num_letters = len(next(iter(valid_solutions)))
     solver = WordleSolver(
@@ -332,19 +347,21 @@ def interactive(hard_mode, max_attempts, num_guesses, first_guess, valid_solutio
               help="Run in interactive mode (default) or simulate all possible games")
 @click.option("--hard-mode", type=click.BOOL, default=False, help="Run games in hard mode")
 @click.option("--max-attempts", type=click.INT, default=6, help="Maximum number of attempts in a game")
-@click.option("--num-guesses", type=click.INT, default=1000,
-              help="Number of guesses to check while searching for optimum")
+@click.option("--num-guesses", type=click.INT, default=-1,
+              help="Number of guesses to check while searching for optimum, if -1 tries all")
 @click.option("--words-file", type=click.Path(), default="words.json",
               help="File containing valid solutions and guesses")
 @click.option("--word", type=click.STRING, required=False,
               help="Word to guess (in simulate mode)")
 @click.option("--first-guess", type=click.STRING, default="soare",
-              help="Default first guess to make. Leave blank for random. (Warning: this will take a long time)")
+              help="Default first guess to make. Leave blank to find optimal. (Warning: this will take a long time)")
 def main(run_mode, hard_mode, max_attempts, num_guesses, words_file, word, first_guess):
     with open(words_file, 'r') as wf:
         words_obj = json.load(wf)
         valid_solutions = words_obj['valid_solutions']
         valid_guesses = words_obj['valid_guesses']
+    if len(first_guess.strip()) == 0:
+        first_guess = determine_optimal_starting_word(valid_solutions, valid_guesses)
     if run_mode == "interactive":
         interactive(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions, valid_guesses)
     elif run_mode == "simulate":

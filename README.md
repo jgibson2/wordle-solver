@@ -39,7 +39,7 @@ the maximal number of possibilities until only one remains. In practice, this ta
 ### The First Guess
 The optimal first guess can be determined by searching the entire space of guesses for the one that
 eliminates the most solutions, in expectation. Because each new game is independent, this can be used
-for every game. The optimal guess is **soare**, which is a type of young hawk, but you can set the tool
+for every game. The optimal (one-step lookahead) guess is **soare**, which is a type of young hawk, but you can set the tool
 to use a different word initially, or let it choose one itself (but be warned that this will take a long time).
 
 ### Subsequent Guesses
@@ -49,11 +49,11 @@ from each round:
 * Any solutions with letters marked ABSENT (and not PRESENT) are removed
 * Any leftover solutions without all CORRECT and PRESENT letters (in the proper multiplicities) are also removed
 
-Then, a large number of guesses are sampled from the valid guess list (default 1000) and combined with all remaining valid solutions,
-and the one that removes the largest number of additional solutions in expectation over the remaining solutions is returned as the 
+Then, a large number of guesses are sampled from the valid guess list (default all) and combined with all remaining valid solutions,
+and the one that gives the largest possible amount of information is returned as the 
 next guess. When the number of remaining solutions equals one, it is returned.
 
 # Results
 
-The algorithm averages 3.76 guesses per game in normal mode and has a win rate of 100%. In hard mode, the algorithm
-averages a slightly lower 3.70 guesses per game and has a win rate of 99.65%. 
+The algorithm averages 3.66 guesses per game in normal mode and has a win rate of 100%. In hard mode, the algorithm
+averages 3.74 guesses per game and has a win rate of 99.7%. 
