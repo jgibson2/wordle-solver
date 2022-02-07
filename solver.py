@@ -247,13 +247,6 @@ class WordleSolver:
         result_probs = np.array(list(result_counts.values())) / total
         return -1 * np.sum(result_probs * np.log(result_probs))
 
-
-@functools.cache
-def get_all_possible_results(n):
-    res = np.stack(np.meshgrid(*([[GuessResult.ABSENT, GuessResult.PRESENT, GuessResult.CORRECT]] * n))).reshape(-1, n)
-    return tuple([tuple(r) for r in res])
-
-
 def run_game(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions, valid_guesses, word, print_results=True):
     wordle = Wordle(word, valid_solutions, valid_guesses, max_attempts=max_attempts, hard_mode=hard_mode)
     solver = WordleSolver(
