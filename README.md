@@ -55,5 +55,5 @@ next guess. When the number of remaining solutions equals one, it is returned.
 
 # Results
 
-The algorithm averages 3.66 guesses per game in normal mode and has a win rate of 100%. In hard mode, the algorithm
-averages 3.74 guesses per game and has a win rate of 99.7%. 
+The algorithm averages 3.53 guesses per game in normal mode and has a win rate of 100%. In hard mode, the algorithm
+averages 3.67 guesses per game and has a win rate of 99.61%. 

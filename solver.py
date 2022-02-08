@@ -12,6 +12,7 @@ import re
 
 import concurrent.futures
 
+
 class GuessResult(enum.Enum):
     ABSENT = 0
     PRESENT = 1
@@ -245,7 +246,14 @@ class WordleSolver:
         result_counts = collections.Counter(map(lambda s: Wordle.check(guess, s), valid_solutions))
         total = len(valid_solutions)
         result_probs = np.array(list(result_counts.values())) / total
-        return -1 * np.sum(result_probs * np.log(result_probs))
+        entropy = -1 * np.sum(result_probs * np.log(result_probs))
+        if tuple([GuessResult.CORRECT] * len(guess)) in result_counts:
+            # add back in the entropy for this guess and replace it with log(p) = -1
+            prob = result_counts[tuple([GuessResult.CORRECT] * len(guess))] / total
+            entropy += prob * np.log(prob)
+            entropy -= prob * -1
+        return entropy
+
 
 def run_game(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions, valid_guesses, word, print_results=True):
     wordle = Wordle(word, valid_solutions, valid_guesses, max_attempts=max_attempts, hard_mode=hard_mode)
@@ -352,6 +360,7 @@ def main(run_mode, hard_mode, max_attempts, num_guesses, words_file, word, first
     with open(words_file, 'r') as wf:
         words_obj = json.load(wf)
         valid_solutions = words_obj['valid_solutions']
+        np.random.shuffle(valid_solutions)
         valid_guesses = words_obj['valid_guesses']
     if len(first_guess.strip()) == 0:
         first_guess = determine_optimal_starting_word(valid_solutions, valid_guesses)
