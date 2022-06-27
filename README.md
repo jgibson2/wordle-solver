@@ -42,6 +42,8 @@ eliminates the most solutions, in expectation. Because each new game is independ
 for every game. The optimal (one-step lookahead) guess is **soare**, which is a type of young hawk, but you can set the tool
 to use a different word initially, or let it choose one itself (but be warned that this will take a long time).
 
+Note: multi-step lookahead determined the optimal first word is **salet**, a kind of helmet.
+
 ### Subsequent Guesses
 After the first guess, the algorithm will filter out potential solutions using the information gained
 from each round:

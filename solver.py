@@ -255,7 +255,8 @@ class WordleSolver:
         return entropy
 
 
-def run_game(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions, valid_guesses, word, print_results=True):
+def run_game(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions, valid_guesses, word,
+             print_results=True):
     wordle = Wordle(word, valid_solutions, valid_guesses, max_attempts=max_attempts, hard_mode=hard_mode)
     solver = WordleSolver(
         wordle.num_letters(),
@@ -269,7 +270,9 @@ def run_game(hard_mode, max_attempts, num_guesses, first_guess, valid_solutions,
     while True:
         guess = solver.suggest_guess()
         result, outcome = wordle.guess(guess)
-        guesses.append(f"({len(solver.valid_solutions)} remaining) {guess} {GuessResult.format_result(result)}")
+        info_gain = WordleSolver.calc_guess_expected_info_gain(solver.valid_solutions, guess)
+        guesses.append(
+            f"({len(solver.valid_solutions)} remaining) {guess} ({info_gain:.2f} bits) {GuessResult.format_result(result)}")
         solver.update(guess, result)
         if outcome is not None:
             outcome_str = 'Won' if outcome == Outcome.WIN else 'Lost'
@@ -330,6 +333,8 @@ def interactive(hard_mode, max_attempts, num_guesses, first_guess, valid_solutio
 
     for _ in range(max_attempts):
         print(f"{len(solver.valid_solutions)} solutions remaining")
+        if len(solver.valid_solutions) < 10:
+            print(f"Remaining solutions: {', '.join(solver.valid_solutions)}")
         next_guess = solver.suggest_guess()
         print(f'Suggested next guess: {next_guess.upper()}')
         guess = input("Input your guess:").strip().lower()
@@ -354,7 +359,7 @@ def interactive(hard_mode, max_attempts, num_guesses, first_guess, valid_solutio
               help="File containing valid solutions and guesses")
 @click.option("--word", type=click.STRING, required=False,
               help="Word to guess (in simulate mode)")
-@click.option("--first-guess", type=click.STRING, default="soare",
+@click.option("--first-guess", type=click.STRING, default="salet",
               help="Default first guess to make. Leave blank to find optimal. (Warning: this will take a long time)")
 def main(run_mode, hard_mode, max_attempts, num_guesses, words_file, word, first_guess):
     with open(words_file, 'r') as wf:
